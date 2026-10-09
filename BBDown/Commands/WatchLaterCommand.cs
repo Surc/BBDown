@@ -59,8 +59,8 @@ public class WatchLaterCommand : AsyncCommand<WatchLaterSettings>
             foreach (var (aid, title) in targets)
             {
                 // RF-70：title 来自服务器原文（item.GetValueAsStringSafe），可含 CRLF 伪造日志行；
-                // 与 RF-54 同构过 SanitizeLogString 后再写日志。
-                Logger.Log($"--- 下载 av{aid} {BBDownApiServer.SanitizeLogString(title)} ---");
+                // 与 RF-54 同构过 SanitizeLogString 后再写日志。aid 同为服务器原文，同处净化。
+                Logger.Log($"--- 下载 av{BBDownApiServer.SanitizeLogString(aid)} {BBDownApiServer.SanitizeLogString(title)} ---");
                 try
                 {
                     var opt = settings.ToMyOption($"av{aid}", settings.WorkDir);
@@ -80,7 +80,7 @@ public class WatchLaterCommand : AsyncCommand<WatchLaterSettings>
                     // 让调用方拿到非零退出码（此前静默继续并返回 0，
                     // 脚本/CI 无法区分"全部成功"与"部分失败"）
                     failed++;
-                    Logger.LogWarn($"av{aid} 下载失败（继续下一个）: {ex.Message}");
+                    Logger.LogWarn($"av{BBDownApiServer.SanitizeLogString(aid)} 下载失败（继续下一个）: {ex.Message}");
                 }
             }
             Logger.Log($"稍后再看下载完成：成功 {succeeded} 个，失败 {failed} 个");

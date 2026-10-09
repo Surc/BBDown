@@ -43,7 +43,9 @@ public static class CommentUtil
             var root = doc.RootElement;
             int code = root.GetInt32Safe("code");
             if (code != 0)
-                throw new InvalidOperationException($"获取评论失败(code={code}): {root.GetValueAsStringSafe("message")}");
+                // message 是服务器原文（可含 CRLF/ANSI）：与解析路径同族过 SanitizeServerText
+                // 再拼异常消息，避免远端内容向日志/终端注入（RF-80 同族残留）。
+                throw new InvalidOperationException($"获取评论失败(code={code}): {JsonElementExtensions.SanitizeServerText(root.GetValueAsStringSafe("message"))}");
             var dataElem = root.TryGetPropertySafe("data");
             if (dataElem is null) break;
             var replies = dataElem.Value.EnumerateArraySafe("replies");

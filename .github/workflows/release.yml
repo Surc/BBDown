@@ -299,6 +299,9 @@ jobs:
 
   create-release:
     runs-on: ubuntu-latest
+    # 只在 v* tag 上运行：workflow_dispatch 可从任意分支触发，若在分支上执行，
+    # 下方会以 github.ref_name（分支名）创建 tag/release（如 main），把非发布构建当成正式版本。
+    if: startsWith(github.ref, 'refs/tags/v')
     needs: [build-win-x64-arm64, build-linux-x64-arm64, build-mac-x64-arm64]
     steps:
       - uses: actions/checkout@v4
@@ -387,6 +390,9 @@ jobs:
   # 镜像 ghcr.io/aliveranme/bbdown：latest 始终指向最新 release。
   docker-publish:
     runs-on: ubuntu-latest
+    # 同上：分支名含 '/' 时 `:branchname` 是非法 Docker 标签（步骤失败）；不含 '/' 时
+    # 也会把 :latest 从最新 release 重指向分支构建。
+    if: startsWith(github.ref, 'refs/tags/v')
     needs: [test]
     permissions:
       contents: read

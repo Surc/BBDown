@@ -401,6 +401,7 @@ internal static class BBDownDownloadUtil
             if (await PrepareAria2cTargetAsync(url, path, fileSize, probeHeaders, probeContentHeaders, token))
             {
                 Logger.LogDebug("文件已下载过, 跳过下载");
+                CleanStaleWorkArtifactsFor(path);
                 return;
             }
             await BBDownAria2c.DownloadFileByAria2cAsync(url, path, config.Aria2cArgs, token);
@@ -408,6 +409,8 @@ internal static class BBDownDownloadUtil
                 throw new InvalidOperationException("aria2下载可能存在错误");
             // 不清除身份清单：它作为"完成证书"保留，下次重跑时 PrepareAria2cTarget 可经
             // CanResumeFrom 确认身份后跳过，而不是把完整文件误判为"身份不可信"删除重下。
+            // 其它下载模式遗留的工作残留（.tmp/分片/.merging）已无消费者，顺手回收。
+            CleanStaleWorkArtifactsFor(path);
             return;
         }
         int retry = 0;
@@ -415,7 +418,13 @@ internal static class BBDownDownloadUtil
         // 目标长度可能被权威总长修正、续传点可能携带 If-Range，均以返回的决策为准。
         var precheck = await PrepareSingleThreadTargetAsync(
             url, path, fileSize, probeHeaders?.ETag?.Tag, probeContentHeaders?.LastModified?.ToString("R"), token);
-        if (precheck.AlreadyComplete) return;
+        if (precheck.AlreadyComplete)
+        {
+            // 成品已就位：回收其它下载模式遗留的工作残留（.tmp/.aria2/分片/.merging），
+            // 否则 GB 级临时文件与工作目录会永久残留（见 CleanStaleWorkArtifactsFor）。
+            CleanStaleWorkArtifactsFor(path);
+            return;
+        }
         string tmpName = precheck.TmpName;
         fileSize = precheck.FileSize;
         string? resumeIfRange = precheck.ResumeIfRange;
@@ -710,11 +719,10 @@ internal static class BBDownDownloadUtil
                 {
                     Logger.LogDebug("文件已下载过, 跳过下载");
                     DeleteResumeManifest(path);
-                    // 成品已完整时，历史中断遗留的合并临时文件（GB 级）与分片不再有任何
-                    // 消费者——CleanStaleClipsFor 只清 *_<stem>.vclip/.aclip 分片文件，
-                    // .merging 不在其匹配范围内，必须在此显式清理，否则永久泄漏磁盘。
-                    CleanStaleClipsFor(path);
-                    DeleteStaleMergeTmp(path);
+                    // 成品已完整时，历史中断遗留的分片、合并临时文件（GB 级）以及其它
+                    // 下载模式遗留的 .tmp/.aria2 不再有任何消费者——不显式清理就永久
+                    // 泄漏磁盘，并让工作目录因非空永不回收（见 CleanStaleWorkArtifactsFor）。
+                    CleanStaleWorkArtifactsFor(path);
                     return;
                 }
                 // 用权威总长下传 Core：占位 HEAD 若一路带进 expectedTotalSize，对无视 Range
@@ -741,18 +749,9 @@ internal static class BBDownDownloadUtil
                 }
             }
             File.Move(tmpMerged, path, true);
-            // 清理分片与轨道清单（清单随分片一起移除，下次干净开始）
-            foreach (var clip in clips)
-            {
-                try { File.Delete(clip); }
-                catch (IOException) { /* 清理失败不影响主流程 */ }
-            }
-            try
-            {
-                string trackManifest = ResumeManifestPath(ClipPathFor(path, 0));
-                if (File.Exists(trackManifest)) File.Delete(trackManifest);
-            }
-            catch (IOException) { /* 清理失败不影响主流程 */ }
+            // 清理分片、轨道清单（清单随分片一起移除，下次干净开始）与其它下载模式
+            // 遗留的工作残留（.tmp/.aria2/.merging）：无消费者，留着会让工作目录永不回收。
+            CleanStaleWorkArtifactsFor(path);
         }, token);
     }
 
@@ -770,11 +769,16 @@ internal static class BBDownDownloadUtil
             // 与单线程 aria2 分支一致：先校验续传目标身份（防跨资源续传拼损坏文件），
             // 已完整则跳过（MultiThreadDownloadAndMergeAsync 已做过一次长度跳过，此处兜底）
             if (await PrepareAria2cTargetAsync(url, path, fileSize, probeHeaders, probeContentHeaders, token))
+            {
+                CleanStaleWorkArtifactsFor(path);
                 return ([], fileSize);
+            }
             await BBDownAria2c.DownloadFileByAria2cAsync(url, path, config.Aria2cArgs, token);
             if (File.Exists(path + ".aria2") || !File.Exists(path))
                 throw new InvalidOperationException("aria2下载可能存在错误");
-            // 同单线程：保留身份清单作为完成证书，供重跑跳过完整文件
+            // 同单线程：保留身份清单作为完成证书，供重跑跳过完整文件；其它下载模式
+            // 遗留的工作残留（.tmp/分片/.merging）已无消费者，顺手回收。
+            CleanStaleWorkArtifactsFor(path);
             return ([], fileSize);
         }
         Logger.LogDebug("文件大小：{0} bytes", fileSize);
@@ -797,9 +801,10 @@ internal static class BBDownDownloadUtil
             if (trustworthy)
             {
                 Logger.LogDebug("文件已下载过, 跳过下载");
-                // 目标文件已完整：清理上一次中断遗留的该路径分片。否则调用方（Display）
-                // 在下载返回后仍会无条件重合并目录里的 .vclip，用残缺分片截断覆盖这份完整成品。
-                CleanStaleClipsFor(path);
+                // 目标文件已完整：清理上一次中断遗留的该路径分片（否则调用方（Display）
+                // 在下载返回后仍会无条件重合并目录里的 .vclip，用残缺分片截断覆盖这份完整
+                // 成品），以及其它下载模式遗留的 .tmp/.aria2/.merging 等工作残留。
+                CleanStaleWorkArtifactsFor(path);
                 return ([], fileSize);
             }
             fileSize = known;
@@ -1002,6 +1007,27 @@ internal static class BBDownDownloadUtil
         var merging = path + ".merging";
         try { if (File.Exists(merging)) File.Delete(merging); }
         catch (IOException) { /* 占用中：下次运行再清理 */ }
+    }
+
+    /// <summary>
+    /// 成品文件已完整（本次产出或跳过判定）时，清理该目标路径上全部不再有消费者的
+    /// 下载工作残留：分片（*_.vclip/.aclip）、合并临时文件（.merging）、多线程轨道清单、
+    /// 单线程临时文件 path+".tmp" 及其续传清单、aria2c 控制文件 path+".aria2"。
+    /// 跨下载模式的残留（先单线程中断留下 GB 级 .tmp，之后改用多线程/aria2 下完）
+    /// 此前无人清理：既永久占用磁盘，又让 aid 工作目录因非空永不回收
+    ///（DownloadFinalizer 只删空目录）。绝不触碰成品 path 本身，也不动
+    /// path+".manifest.json"——那是 aria2 的"完成证书"，供下次跳过完整文件。
+    /// internal 供 DownloadPipelineTests 直接验证清理范围（成品与完成证书不受影响）。
+    /// </summary>
+    internal static void CleanStaleWorkArtifactsFor(string path)
+    {
+        CleanStaleClipsFor(path);
+        DeleteStaleMergeTmp(path);
+        string tmpName = path + ".tmp";
+        TryDeleteStale(tmpName);
+        DeleteResumeManifest(tmpName);
+        TryDeleteStale(path + ".aria2");
+        DeleteResumeManifest(ClipPathFor(path, 0));
     }
 
     //此函数主要是切片下载逻辑

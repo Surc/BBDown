@@ -969,17 +969,34 @@ public static class LiveStreamUtil
         try
         {
             var expectedPackets = new FlvPacketCounts(0, 0);
+            // 零媒体帧段（只有 FLV 头/onMetaData/序列头，无任何音视频帧）对录像内容零贡献：
+            // 跳过而不是否决整场合成——断流重连（连上后配置突发已送达、首帧未到即 EOF 或
+            // 被停滞看门狗/段尾裁剪截断）就会产生这类段，此前任一段零帧即整场合成失败，
+            // 录制数小时却拿不到输出文件（v1.7.4 回归）。结构损坏的段仍按失败处理。
+            var usableSegments = new List<string>(segmentFiles.Count);
             foreach (var seg in segmentFiles)
             {
-                if (!TryCountFlvMediaPackets(seg, out var packets, token) || packets.Total == 0)
+                if (!TryCountFlvMediaPackets(seg, out var packets, token))
                 {
                     Logger.LogWarn($"直播分段不是完整的 FLV 媒体文件: {seg}");
                     return false;
                 }
+                if (packets.Total == 0)
+                {
+                    Logger.LogWarn($"直播分段无媒体帧，已跳过: {seg}");
+                    continue;
+                }
+                usableSegments.Add(seg);
                 expectedPackets = new(expectedPackets.Audio + packets.Audio, expectedPackets.Video + packets.Video);
             }
 
-            await File.WriteAllLinesAsync(listPath, segmentFiles.Select(f => $"file '{f.Replace("'", "'\\''")}'"), token);
+            if (usableSegments.Count == 0)
+            {
+                Logger.LogWarn("直播分段均无媒体帧，无内容可合成");
+                return false;
+            }
+
+            await File.WriteAllLinesAsync(listPath, usableSegments.Select(f => $"file '{f.Replace("'", "'\\''")}'"), token);
             var args = new List<string>
             {
                 "-loglevel", "warning", "-y",

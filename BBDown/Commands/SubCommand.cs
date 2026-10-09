@@ -235,7 +235,9 @@ public class SubCheckCommand : AsyncCommand<SubCheckSettings>
                     continue;
                 }
 
-                Logger.Log($"  发现 {newAids.Count} 个新内容: av{string.Join(", av", newAids)}");
+                // aid 来自 IAidLister 的服务器原文：过 SanitizeLogString 防 CRLF/ANSI 注入
+                // 日志（RF-70 同族残留）。
+                Logger.Log($"  发现 {newAids.Count} 个新内容: av{string.Join(", av", newAids.Select(BBDownApiServer.SanitizeLogString))}");
                 bool anyAidFailed = false;
                 foreach (var aid in newAids)
                 {
@@ -265,7 +267,7 @@ public class SubCheckCommand : AsyncCommand<SubCheckSettings>
                     catch (Exception ex) when (ExceptionPolicies.IsSkippableItemFailure(ex))
                     {
                         anyAidFailed = true;
-                        Logger.LogWarn($"  av{aid} 下载失败（继续下一个）: {ex.Message}");
+                        Logger.LogWarn($"  av{BBDownApiServer.SanitizeLogString(aid)} 下载失败（继续下一个）: {ex.Message}");
                     }
                 }
                 if (anyAidFailed) failedSubs++;

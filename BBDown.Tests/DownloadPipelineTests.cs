@@ -128,6 +128,50 @@ public class DownloadPipelineTests
         }
     }
 
+    /// <summary>
+    /// 成品完整时清理必须覆盖全部跨模式工作残留：分片及其清单、合并临时文件、
+    /// 单线程 .tmp 及其续传清单、aria2 控制文件——但绝不触碰成品本身、
+    /// aria2 的"完成证书"（path+".manifest.json"）与其它任务的残留。
+    /// 此前各跳过路径只清 .vclip/.merging，先单线程中断（GB 级 .tmp）后改用
+    /// 多线程/aria2 下完的残留无人清理，磁盘与工作目录永久泄漏。
+    /// </summary>
+    [Fact]
+    public void CleanStaleWorkArtifacts_RemovesAllStaleWorkFiles_KeepsProductAndCertificate()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "bbdown-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var target = Path.Combine(dir, "video.mp4");
+            var clip = Path.Combine(dir, "00000_video.vclip");
+            var clipManifest = clip + ".manifest.json";
+            var merging = target + ".merging";
+            var tmp = target + ".tmp";
+            var tmpManifest = tmp + ".manifest.json";
+            var aria2Control = target + ".aria2";
+            var certificate = target + ".manifest.json"; // aria2 完成证书：跳过完整文件的依据
+            var otherTask = Path.Combine(dir, "00000_other.vclip");
+            foreach (var f in new[] { target, clip, clipManifest, merging, tmp, tmpManifest, aria2Control, certificate, otherTask })
+                File.WriteAllText(f, "x");
+
+            BBDownDownloadUtil.CleanStaleWorkArtifactsFor(target);
+
+            Assert.True(File.Exists(target), "成品文件不能被清理");
+            Assert.True(File.Exists(certificate), "aria2 完成证书不能被清理");
+            Assert.True(File.Exists(otherTask), "其它任务的残留不能被清理");
+            Assert.False(File.Exists(clip), "历史分片应被清理");
+            Assert.False(File.Exists(clipManifest), "分片续传清单应被清理");
+            Assert.False(File.Exists(merging), "合并临时文件应被清理");
+            Assert.False(File.Exists(tmp), "跨模式遗留的 .tmp 应被清理");
+            Assert.False(File.Exists(tmpManifest), "单线程续传清单应被清理");
+            Assert.False(File.Exists(aria2Control), "aria2 控制文件应被清理");
+        }
+        finally
+        {
+            Directory.Delete(dir, true);
+        }
+    }
+
     [Theory]
     [InlineData(2, 3, 2)]
     [InlineData(5, 3, 2)]   // 越界 → 钳到末位
@@ -1338,6 +1382,56 @@ public class DownloadPipelineTests
 
             // 已完整下载过 → 跳过，既有内容保持不变（未被覆盖）
             Assert.Equal(existingHash, TestHash.ComputeSha256Hex(await File.ReadAllBytesAsync(target)));
+            Assert.Equal(0, BBDownDownloadUtil.ActivePathLockCount);
+        }
+        finally
+        {
+            Directory.Delete(dir, true);
+        }
+    }
+
+    /// <summary>
+    /// 成品已完整、单线程路径跳过下载时，必须顺手回收其它下载模式遗留的工作残留
+    /// （GB 级 .tmp 及其续传清单、.aria2 控制文件、历史分片、合并临时文件）：这些
+    /// 残留已无消费者，不清理则永久占用磁盘、工作目录因非空永不回收（L2 第 8 调用点，
+    /// 先单线程中断留下大 .tmp、之后文件被其它方式下完的场景）。
+    /// 清理只针对本目标的残留：成品与无关文件不受影响。
+    /// </summary>
+    [Fact]
+    public async Task SingleThreadDownload_ExistingCompleteFile_CleansStaleWorkArtifacts()
+    {
+        using var server = new LocalByteServer(256 * 1024);
+        var dir = Path.Combine(Path.GetTempPath(), "bbdown-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        var target = Path.Combine(dir, "video.mp4");
+        try
+        {
+            var existing = new byte[256 * 1024];
+            new Random(78).NextBytes(existing);
+            await File.WriteAllBytesAsync(target, existing);
+            var existingHash = TestHash.ComputeSha256Hex(existing);
+            // 其它下载模式遗留的工作残留（仅本目标）与一个无关任务的残留
+            var staleTmp = target + ".tmp";
+            var staleTmpManifest = staleTmp + ".manifest.json";
+            var staleAria2 = target + ".aria2";
+            var staleClip = Path.Combine(dir, "00000_video.vclip");
+            var staleMerging = target + ".merging";
+            var unrelated = Path.Combine(dir, "00000_other.vclip");
+            foreach (var f in new[] { staleTmp, staleTmpManifest, staleAria2, staleClip, staleMerging, unrelated })
+                File.WriteAllText(f, "stale");
+
+            var config = new BBDownDownloadUtil.DownloadConfig();
+            await BBDownDownloadUtil.DownloadFileAsync(
+                $"http://127.0.0.1:{server.Port}/file", target, config, CancellationToken.None);
+
+            // 成品内容保持不变（未被覆盖），残留被回收
+            Assert.Equal(existingHash, TestHash.ComputeSha256Hex(await File.ReadAllBytesAsync(target)));
+            Assert.False(File.Exists(staleTmp), "跨模式遗留的 .tmp 应被回收");
+            Assert.False(File.Exists(staleTmpManifest), ".tmp 续传清单应被回收");
+            Assert.False(File.Exists(staleAria2), ".aria2 控制文件应被回收");
+            Assert.False(File.Exists(staleClip), "历史分片应被回收");
+            Assert.False(File.Exists(staleMerging), "合并临时文件应被回收");
+            Assert.True(File.Exists(unrelated), "其它任务的残留不能被误删");
             Assert.Equal(0, BBDownDownloadUtil.ActivePathLockCount);
         }
         finally

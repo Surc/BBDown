@@ -212,6 +212,81 @@ public class LiveStreamUtilTests
         }
     }
 
+    /// <summary>
+    /// 零媒体帧分段（断流重连后只收到 FLV 头/配置标签即 EOF，或段尾裁剪把帧全裁掉）
+    /// 必须被跳过而不是否决整场合成：v1.7.4 的"任一段零帧即整场失败"让录制数小时的
+    /// 直播在末尾重连产生空段时拿不到输出文件。三段中间夹一个纯 FLV 头段，
+    /// 期望合成成功且 concat 列表只含有帧的两段。
+    /// </summary>
+    [Fact]
+    public async Task ConcatSegments_ZeroMediaFrameSegment_IsSkippedAndRemainingMerged()
+    {
+        var original = BBDownMuxer.ProcessRunner;
+        var dir = Path.Combine(Path.GetTempPath(), "live-zero-frame-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var seg1 = Path.Combine(dir, "seg-000.flv");
+            var seg2 = Path.Combine(dir, "seg-001.flv");
+            var seg3 = Path.Combine(dir, "seg-002.flv");
+            await File.WriteAllBytesAsync(seg1, BuildTestFlv(1));
+            await File.WriteAllBytesAsync(seg2, BuildEnhancedAudioFlv()); // 仅 FLV 头：零媒体帧
+            await File.WriteAllBytesAsync(seg3, BuildTestFlv(1));
+            var fake = new FakeProcessRunner(exitCode: 0, outputContent: BuildTestFlv(2));
+            BBDownMuxer.ProcessRunner = fake;
+
+            var ok = await LiveStreamUtil.ConcatSegmentsAsync(
+                [seg1, seg2, seg3], Path.Combine(dir, "out.flv"), CancellationToken.None);
+
+            Assert.True(ok, "零媒体帧分段应被跳过，其余分段正常合成");
+            Assert.NotNull(fake.CapturedInput);
+            Assert.Contains(Path.GetFullPath(seg1), fake.CapturedInput);
+            Assert.Contains(Path.GetFullPath(seg3), fake.CapturedInput);
+            Assert.DoesNotContain(Path.GetFullPath(seg2), fake.CapturedInput);
+            // 媒体帧对账只统计可用分段：输出恰为两段的 2 帧
+            Assert.Equal(2, fake.CapturedInput!.Split('\n')
+                .Count(line => line.StartsWith("file '", StringComparison.Ordinal)));
+        }
+        finally
+        {
+            BBDownMuxer.ProcessRunner = original;
+            try { if (Directory.Exists(dir)) Directory.Delete(dir, true); } catch { }
+        }
+    }
+
+    /// <summary>
+    /// 全部输入段都无媒体帧（例如整场只收到配置标签）时没有任何内容可合成：
+    /// 返回 false，且不启动 ffmpeg（对空输入跑 concat 只会产出空文件/失败退出）。
+    /// 结构损坏的段仍按失败处理（零帧 ≠ 损坏）。
+    /// </summary>
+    [Fact]
+    public async Task ConcatSegments_AllSegmentsZeroMediaFrames_ReturnsFalseWithoutInvokingFfmpeg()
+    {
+        var original = BBDownMuxer.ProcessRunner;
+        var dir = Path.Combine(Path.GetTempPath(), "live-zero-frame-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var seg1 = Path.Combine(dir, "seg-000.flv");
+            var seg2 = Path.Combine(dir, "seg-001.flv");
+            await File.WriteAllBytesAsync(seg1, BuildEnhancedAudioFlv());      // 仅 FLV 头
+            await File.WriteAllBytesAsync(seg2, BuildLegacyPacketizedFlv(7)); // 仅 avcC 序列头
+            var fake = new FakeProcessRunner(exitCode: 0);
+            BBDownMuxer.ProcessRunner = fake;
+
+            var ok = await LiveStreamUtil.ConcatSegmentsAsync(
+                [seg1, seg2], Path.Combine(dir, "out.flv"), CancellationToken.None);
+
+            Assert.False(ok);
+            Assert.Empty(fake.Specs);
+        }
+        finally
+        {
+            BBDownMuxer.ProcessRunner = original;
+            try { if (Directory.Exists(dir)) Directory.Delete(dir, true); } catch { }
+        }
+    }
+
     [Fact]
     public async Task DownloadToFile_EmptyVideoPayload_KeepsOldOutputAndSegment()
     {

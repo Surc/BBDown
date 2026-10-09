@@ -57,7 +57,10 @@ internal partial class Program
                 "aid" => p.aid,
                 "cid" => p.cid,
                 "ownerName" => p.ownerName == null ? "" : BBDownUtil.GetValidFileName(p.ownerName, filterSlash: true).Trim().TrimEnd('.').Trim(),
-                "ownerMid" => p.ownerMid ?? "",
+                // RF-58/63 同族残留：ownerMid 同为服务器透传值（镜像站 --host 或 --insecure
+                // 中间人可控，可含 '/' 或 '..'），与 ownerName 一致过 GetValidFileName——
+                // 否则 `..\..\tmp\x` 可经 Path.Combine 逃出 --work-dir。
+                "ownerMid" => p.ownerMid == null ? "" : BBDownUtil.GetValidFileName(p.ownerMid, filterSlash: true).Trim().TrimEnd('.').Trim(),
                 // RF-58：dfn/res/fps/codecs 是服务器透传值（镜像站 --host 或 --insecure 中间人
                 // 可控，可含 '/' 或 '..'），与 title 族一致统一过 GetValidFileName（RF-18 同族）。
                 "dfn" => videoTrack == null ? "" : BBDownUtil.GetValidFileName(videoTrack.dfn, filterSlash: true).Trim().TrimEnd('.').Trim(),

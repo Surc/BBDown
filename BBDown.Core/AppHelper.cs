@@ -164,7 +164,13 @@ static partial class AppHelper
                 var limitedItem = resp.VideoInfo.StreamList.FirstOrDefault(s => s.StreamInfo?.Limit != null || s.StreamInfo?.NeedVip == true);
                 if (limitedItem != null)
                 {
-                    var msg = limitedItem.StreamInfo?.Limit?.Msg ?? (limitedItem.StreamInfo?.NeedVip == true ? "需要大会员权限" : "存在播放限制");
+                    // Limit.Msg 是服务端 protobuf 原文（可含 CRLF/ANSI 控制序列）：与解析路径
+                    // 同族过 SanitizeServerText 再拼异常消息，避免远端内容向日志/终端注入
+                    //（B3-L3/RF-80 同族）。
+                    string? limitMsg = limitedItem.StreamInfo?.Limit?.Msg;
+                    var msg = limitMsg is not null
+                        ? JsonElementExtensions.SanitizeServerText(limitMsg)
+                        : (limitedItem.StreamInfo?.NeedVip == true ? "需要大会员权限" : "存在播放限制");
                     throw new InvalidOperationException($"APP接口返回播放限制: {msg}");
                 }
             }

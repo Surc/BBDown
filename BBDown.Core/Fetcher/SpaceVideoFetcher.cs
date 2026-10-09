@@ -232,7 +232,12 @@ public class SpaceVideoFetcher : IFetcher, IAidLister
                                           or IOException or KeyNotFoundException
                                           or InvalidOperationException or TaskCanceledException or TimeoutException)
             {
-                failures.Add((entry.Aid, entry.Title, ex.Message));
+                // Aid/Title 是服务器原文（可含 CRLF/ANSI）：与 RF-54/RF-70 同族过
+                // SanitizeServerText 后再记入失败列表（ReportFailures 会落日志）。
+                failures.Add((
+                    JsonElementExtensions.SanitizeServerText(entry.Aid),
+                    JsonElementExtensions.SanitizeServerText(entry.Title),
+                    ex.Message));
                 consecutiveFailures++;
 
                 // 连续失败说明问题不在个别稿件上，继续跑既拿不到结果又会加重风控。

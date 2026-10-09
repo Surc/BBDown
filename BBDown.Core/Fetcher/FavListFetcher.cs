@@ -107,7 +107,9 @@ public class FavListFetcher : IFetcher
                     catch (Exception ex) when (ex is HttpRequestException or JsonException or KeyNotFoundException
                                                   or InvalidOperationException or TaskCanceledException or TimeoutException)
                     {
-                        failures.Add($"aid={m.GetValueAsStringSafe("id")} ({m.GetValueAsStringSafe("title")}): {ex.Message}");
+                        // id/title 是服务器原文（可含 CRLF/ANSI）：与 RF-54/RF-70 同族过
+                        // SanitizeServerText 后再记入失败列表（下方 LogWarn 会原样落日志）。
+                        failures.Add($"aid={JsonElementExtensions.SanitizeServerText(m.GetValueAsStringSafe("id"))} ({JsonElementExtensions.SanitizeServerText(m.GetValueAsStringSafe("title"))}): {ex.Message}");
                     }
                 }
                 else
