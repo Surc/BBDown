@@ -1,85 +1,86 @@
-# 本地修改说明
+# 本 fork 的修改与审核记录
 
-## 来源与提交范围
+本页只说明 Surc fork 的调整。原版功能、使用方法和安装说明见 [aliveranme/BBDown](https://github.com/aliveranme/BBDown#readme)；最初项目为 [nilaoda/BBDown](https://github.com/nilaoda/BBDown)。
 
-- Fork 仓库：[Surc/BBDown](https://github.com/Surc/BBDown)。直接来源是 [aliveranme/BBDown](https://github.com/aliveranme/BBDown)，GitHub fork 网络的原始来源是 nilaoda/BBDown。
-- 修改分支：`fix/local-playback-decrypt-mux`。
-- 基线提交：[`03181b86610c1d5f98de1c8595f96bbc086c1525`](https://github.com/aliveranme/BBDown/commit/03181b86610c1d5f98de1c8595f96bbc086c1525)，项目版本为 `1.6.11`。
-- 本次保存原有的 4 个文件修改，另补充 7 个回归用例、修改说明和 README 入口，并纠正一处对进程参数可见性的注释。
-- 保留本地已使用的旧基线，没有合并当前上游 master，也没有把新上游文件覆盖回旧版本。该分支适合保存和复现本地版本；以后升级应按功能移植补丁并处理上游已有修复。
+## 范围与基线
 
-## 1. 正确识别整片可播状态
+- Fork：[Surc/BBDown](https://github.com/Surc/BBDown)。历史修复分支：`fix/local-playback-decrypt-mux`。
+- 代码基线：[`03181b8`](https://github.com/aliveranme/BBDown/commit/03181b86610c1d5f98de1c8595f96bbc086c1525)，v1.6.11。
+- 历史修复：[`21a4b30`](https://github.com/Surc/BBDown/commit/21a4b3077e2c16b0ec9dbdac69171abacaccea91)，保存 4 个原有文件修改，补充 7 个回归用例及说明。
+- 审核对照：2026-10-09，fork 与直接上游的 `master` 均为 [`ca5b838`](https://github.com/aliveranme/BBDown/commit/ca5b8384a773b1a3e72c193f9e8a803dde523714)，v1.7.5。
+
+历史分支用于保存本地版本。以下“已实现”指历史修复提交，“上游已覆盖”指上述审核基线，“待移植”是后续工作；本次文档补充没有将代码移植到新版或合并到 `master`。
+
+## 1. 整片播放状态修复：已实现，值得移植
 
 文件：`BBDown.Core/Parser.cs`，方法：`ThrowIfPlayLimited`。
 
-原逻辑只要 `play_check` 的原因或详情字段非空就抛出异常，会把服务端返回的 `play_detail=PLAY_WHOLE` 也当作播放限制。在历史使用场景中，已登录并启用 DRM 解析时，服务端可能用该状态表示整片可播，原逻辑因此在轨道解析之前终止。
+原判断把非空的播放限制字段直接视为限制，导致 `play_detail=PLAY_WHOLE` 也被拒绝。历史修复识别该状态后继续解析，其他限制仍沿用原检查；业务错误码、登录和许可证流程没有因此取消。
 
-现在识别到 `PLAY_WHOLE` 时直接返回，继续原有解析流程。其他详情仍沿用原限制判断；没有删除业务错误码检查，也没有更改登录或许可证获取流程。
+新增 3 个方法级用例：空原因与 `PLAY_WHOLE`、`PAY` 与 `PLAY_WHOLE` 均继续；`PAY/PLAY_PREVIEW` 仍抛出限制错误。
 
-新增 3 个用例：空原因配合 `PLAY_WHOLE`、`PAY` 配合 `PLAY_WHOLE` 均不抛错；`PAY/PLAY_PREVIEW` 在限制检查方法中仍抛出包含原因与详情的错误。
+v1.7.5 对照代码仍有这项误判，最小行为修复值得保留。移植时必须保留新版的业务错误、风控、响应定位和日志文本净化，并补充从完整响应进入轨道解析的用例。具体验收条件见 [迭代说明](docs/ITERATION.md#第一阶段整片可播修复和补充测试)。
 
-## 2. 兼容官方 Bento4 mp4decrypt 参数
+## 2. mp4decrypt 参数：历史已实现，新版上游已覆盖
 
 文件：`BBDown/Application/Decrypt.cs`，方法：`RunDecryptAsync`。
 
-历史记录中使用的官方 Bento4 SDK 1.6.0-641 不支持原调用方式 `--key-file`，参数解析会报错，导致轨道下载后解密无法完成。本地修改改为其支持的 `--key <kid>:<key>`，并保留输入、输出文件路径的引号。
+历史环境中的官方 Bento4 SDK 1.6.0-641 不接受旧调用的 `--key-file`。修复改为 `--key <kid>:<key>`，删除不再需要的临时密钥文件流程，保留进程失败检查、stderr 读取、输出非空检查、失败清理和取消/超时终止逻辑。
 
-保留了外部进程启动失败检查、stderr 读取、非零退出码处理、失败输出清理、解密文件非空检查，以及取消/超时后的进程树终止逻辑。删除了不再使用的临时密钥文件创建、覆写和删除流程。
+实际兼容性边界是：有权限读取该进程命令行的本机用户可以看到参数中的密钥。原注释中“仅当前会话可读”的说法已纠正。
 
-**兼容性取舍：** 密钥作为进程参数传递，有权限读取该进程命令行的本机用户可以看到密钥。注释已纠正为这一实际边界，不能认为参数“仅当前会话可读”。本次未加入真实密钥、登录凭据或媒体地址，也未重新执行在线 DRM 下载；历史成功记录不能代替本次端到端验证。
+新版上游在 [`f413525`](https://github.com/aliveranme/BBDown/commit/f413525ecfc9f69143dedf4ee583cfed6794b6a5) 已采用官方参数，且有独立进程参数构造、唯一输出路径与失败时保留输入等处理。升级时使用新版实现，不重复移植旧生产代码。此轮没有重新执行在线 DRM 下载。
 
-## 3. 修复封面与章节同时存在时的 ffmpeg 混流失败
+## 3. 封面与章节混流：历史已实现，新版上游已覆盖
 
 文件：`BBDown/Infrastructure/BBDownMuxer.cs`，方法：`MuxAV`。
 
-原逻辑先添加封面的 `-disposition:v:N attached_pic`，再添加章节 metadata 的 `-i` 输入。ffmpeg 会把位于后续输入前的输出选项解释到错误的位置，出现 `cannot be applied to input`，最终混流失败并留下已下载轨道。
+旧逻辑在章节 metadata 的 `-i` 输入前添加封面的 `-disposition:v:N attached_pic`。ffmpeg 会把输出选项解释到输入侧并报 `cannot be applied to input`，导致混流失败。
 
-现在将封面 disposition 统一追加到全部输入之后，再进入媒体映射和后续输出参数构造。普通音视频的封面仍使用 `v:1`，纯音频场景的封面仍使用 `v:0`；只添加一次 disposition，无章节时也正常添加。
+历史修复把封面 disposition 放到所有输入之后。普通音视频使用封面轨 `v:1`，纯音频使用 `v:0`，只添加一次。新增 4 个参数用例，覆盖普通音视频/纯音频与有章节/无章节的组合，检查顺序、轨道下标和重复选项。
 
-新增 4 个参数回归用例，覆盖普通音视频/纯音频与有章节/无章节的组合，检查封面输出选项位于最后一个输入文件之后、轨道下标正确且不会重复。
+新版上游在 [`91fac5d`](https://github.com/aliveranme/BBDown/commit/91fac5daf7cf1b08dfe3a52aeb1211b383b3ea56) 已统一重排输出选项，范围还包括字幕和副音轨。保留新版生产实现，历史 4 个用例可适配为额外回归覆盖。
 
-这项本地补丁只移动封面 disposition；它不等同于新版上游对所有字幕和副音轨输出参数的统一重排。升级时应对照上游实际代码合并。
+## 4. legacy MP4 回退：历史已实现，移植前需重写
 
-## 4. 在指定播放限制场景尝试 legacy MP4
+文件：`BBDown.Core/Parser.cs`，方法：`GetPlayJsonAsync`、`ExtractTracksAsync`。
 
-文件：`BBDown.Core/Parser.cs`，方法：`GetPlayJsonAsync` 和 `ExtractTracksAsync`。
+历史实现默认请求 DASH（`fnval=4048`）；首次限制检查的 `InvalidOperationException` 消息包含“播放限制”时，尝试一次 legacy 请求（`fnval=0`，不附加 `drm_tech_type=2`）。新响应继续检查业务错误与播放限制；有 `durl` 时走原有分段处理，最高画质重请求保留 legacy 状态。
 
-默认继续请求 DASH 格式 `fnval=4048`。当首次限制检查抛出消息包含“播放限制”的 `InvalidOperationException` 时，尝试一次 legacy 请求：
+审核发现三项需要调整：
 
-1. 请求参数切换为 `fnval=0`。
-2. legacy 请求不再附加 `drm_tech_type=2`。
-3. 重新解析响应，并再次执行播放限制和业务错误检查。
-4. 返回 `durl` 时沿用原有 FLV/MP4 分段处理；重新请求最高画质时传递 legacy 状态，避免又切回 DASH。
+1. 中文异常文案不能准确表达可重试范围：`PAY/PLAY_PREVIEW` 可触发，但单独文案的 `PAY_LIMIT` 被遗漏，未知原因反而可能触发。
+2. 参数变化只适用于相应 Web 请求分支，不能让 TV、APP 等接口无效重发相同请求。
+3. 首轮限制检查及回退发生在现有文档释放范围之外，回退请求或解析失败时存在文档未释放的路径；重写应明确每轮响应的所有权、取消传播和失败处理。
 
-该流程只是尝试另一种服务端格式，是否可下载仍取决于服务端响应。仍受限的 legacy 响应会继续报错，不会无条件放行。legacy 格式也不保证与 DASH 相同的清晰度、编码或音轨。
+新版上游尚未包含该回退。后续应按结构化状态、明确 API 范围和最多一次重试重新设计，并覆盖 `durl` 重请求与所有退出路径。legacy 不保证与 DASH 相同的清晰度、编码和音轨；仍受限、试看或空轨道不能记为整片成功。
 
-**现有实现范围：** catch 通过中文错误消息匹配触发，而非结构化限制代码；`PAY/PLAY_PREVIEW` 等落入通用“播放限制”消息的场景可触发，具有单独错误文案的 `PAY_LIMIT`、`VIP_LIMIT`、`AREA_LIMIT`、`TIME_LOCK` 不会因此自动回退。`fnval` 修改位于 Web 请求构造分支，不能把它理解为所有 TV/APP 接口均有相同效果。
+历史对话曾观察到 legacy 返回 `PLAY_WHOLE`，但补丁后的实际补下载恢复使用 DASH，并未触发回退。本轮未做在线回退验证，也未为旧实现新增模拟网络测试。计划和验收见 [迭代说明](docs/ITERATION.md#第二阶段重新设计-legacy-mp4-回退)。
 
-历史对话记录曾观察到 DASH 受限、legacy 返回 `PLAY_WHOLE`，但补丁后的实际补下载恢复使用 DASH，并未触发回退。因此本次不宣称已经完成 legacy 回退的在线端到端验证；也没有为该流程新增模拟网络测试。
+## 5. 本机 SDK：仅用于历史构建
 
-## 5. 本机 .NET SDK 调整
+文件：`global.json`。历史修复把 SDK `10.0.300` 改为本机安装的 `10.0.101`，保留 `latestPatch` 与 `allowPrerelease=false`，项目仍为 `net10.0`、v1.6.11。
 
-文件：`global.json`。
+这不是新版升级所需的补丁。后续按当前基线的 SDK、依赖锁文件和 CI 要求构建，不把该降级带入 v1.7.5。
 
-SDK 从 `10.0.300` 改为本机已安装的 `10.0.101`；保留 `rollForward=latestPatch` 和 `allowPrerelease=false`。这项改动复现原本地构建条件，项目仍目标 `net10.0`，版本仍为 `1.6.11`，没有更改 NuGet 依赖。
+## 验证记录
 
-由于仍使用 `latestPatch`，这不是任意 .NET 10 SDK 都可用的配置；其他机器和 CI 应安装匹配的 SDK，或在后续独立调整版本策略。
+以下记录均发生在 2026-10-09，不能作为后续提交已通过检查的证明。
 
-## 本次验证（2026-10-09）
+### 历史修复提交 21a4b30
 
-环境：Windows，.NET SDK `10.0.101`，本机可用 ffmpeg。测试临时目录设置在可写工作区，使用本机已有 NuGet 缓存完成还原；本次还原关闭在线 NuGet 漏洞查询，这不是漏洞审计结论。
+环境为 Windows、.NET SDK `10.0.101`，ffmpeg 可用，测试临时目录位于可写工作区。依赖使用已有缓存还原，此次关闭在线 NuGet 漏洞查询，未执行漏洞审计。
 
-| 检查 | 结果 |
+| 检查 | 实际结果 |
 | --- | --- |
 | Release 编译 | 成功，0 警告、0 错误 |
-| ParserTests、ParserPlayLimitTests、MuxerArgsTests | 31/31 通过，包含新增的 7 个用例 |
-| 现有真实 ffmpeg 冒烟用例 | 音视频混流、跳过空字幕后混流均实际执行并通过 |
-| 排除 `Category=Integration` 的完整测试 | 401 项，390 通过、11 失败 |
-| `git diff --check` | 通过 |
+| ParserTests、ParserPlayLimitTests、MuxerArgsTests | 31/31 通过，包括新增 7 个用例 |
+| 现有真实 ffmpeg 冒烟用例 | 音视频混流、跳过空字幕后混流实际执行并通过 |
+| 排除 `Category=Integration` 的测试 | 401 项，390 通过、11 失败 |
 
-完整测试不能报告为全部通过。剩余失败为 9 个 HTTP 重定向/下载用例在 `HttpListener.Start` 时“拒绝访问”，以及 2 个外部进程取消/超时用例：这些用例用本机 ping 模拟常驻进程，但当前沙箱的 ping 立即报 `Unable to contact IP driver`，因而没有等待到取消或超时。上述测试文件和生产实现未在本次修改。最初默认沙箱临时目录下另外 7 项文件操作失败，在改用工作区临时目录后已通过。
+11 项失败包括：9 项在 `HttpListener.Start` 遇到“拒绝访问”；2 项用 ping 模拟常驻进程，但沙箱中 ping 立即报 `Unable to contact IP driver`，未达到预期取消/超时场景。最初另有 7 项在默认沙箱临时目录中失败，改用工作区临时目录后通过。相关生产实现和测试文件未为这些环境问题修改。
 
-可复现的主要命令：
+历史复现命令如下；新版必须使用其自身的检查要求：
 
 ```powershell
 dotnet restore --ignore-failed-sources -p:NuGetAudit=false -m:1 -nr:false
@@ -88,8 +89,12 @@ dotnet test BBDown.Tests/BBDown.Tests.csproj -c Release --no-build --no-restore 
 dotnet test BBDown.Tests/BBDown.Tests.csproj -c Release --no-build --no-restore -m:1 -nr:false --filter "Category!=Integration"
 ```
 
-## 交付边界
+### v1.7.5 与历史实现的离线审核
 
-原本地源码目录保留不动。本次只上传明确的源码、SDK 配置、测试和文档差异，不上传 OpenCode 对话 JSON、Cookie、签名下载链接、登录数据、调试日志、下载媒体或构建缓存。基线中原有的文件与历史按 fork 关系继承，未将其描述为本次新增。
+抽取对应提交的生产方法执行 9 组离线场景，确认整片误判与 legacy 判定差异。这是方法级复现，没有访问真实播放接口，没有运行 v1.7.5 完整构建、测试或 CI。
 
-本次没有发布 release、修改版本号、更新 fork 默认分支、合并新上游或向上游创建 PR。修复代码需从本说明列出的分支查看和检出。
+## 本次文档与 skill 补充
+
+本次只调整说明与维护入口：README 改为 fork 差异摘要并链接原版；更新本页的保留结论与验证边界；新增 [迭代说明](docs/ITERATION.md)、[维护约定](AGENTS.md)、[bbdown-fork-iterate skill](skills/bbdown-fork-iterate/SKILL.md) 及其调用元数据。代码、SDK 和原始工作目录保持当前状态。
+
+后续迭代按功能移植，更新本页实际完成的调整与验证记录。保持“已实现”“上游已覆盖”“计划中”“待验证”可区分，不提交原始对话、Cookie、密钥、签名地址、登录文件、下载媒体和构建缓存。

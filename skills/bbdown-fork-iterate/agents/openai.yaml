@@ -1,0 +1,4 @@
+interface:
+  display_name: "BBDown Fork 迭代"
+  short_description: "审核上游差异、迁移本地补丁、维护 fork 专属说明与验证记录"
+  default_prompt: "使用 $bbdown-fork-iterate 审核当前 BBDown fork 与上游的差异，按需保留补丁并更新本次调整说明。"
