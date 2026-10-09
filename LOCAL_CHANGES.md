@@ -63,6 +63,8 @@ v1.7.5 对照代码仍有这项误判，最小行为修复值得保留。移植�
 
 这不是新版升级所需的补丁。后续按当前基线的 SDK、依赖锁文件和 CI 要求构建，不把该降级带入 v1.7.5。
 
+2026-10-10，为验证历史本地补丁，独立分支 `ci/cloud-validation-local-fixes` 将 SDK 恢复为 `10.0.300`，与该历史版本已有的 PR workflow 对齐。应用仍为 v1.6.11；构建要求的变化及云端检查记录见 [云端验证](docs/CLOUD_TESTING.md)。原修复分支和原版备份 tag 保留各自的版本。
+
 ## 验证记录
 
 以下记录均发生在 2026-10-09，不能作为后续提交已通过检查的证明。
@@ -93,8 +95,8 @@ dotnet test BBDown.Tests/BBDown.Tests.csproj -c Release --no-build --no-restore 
 
 抽取对应提交的生产方法执行 9 组离线场景，确认整片误判与 legacy 判定差异。这是方法级复现，没有访问真实播放接口，没有运行 v1.7.5 完整构建、测试或 CI。
 
-## 本次文档与 skill 补充
+## 文档提交 95879d1 与 skill 补充
 
-本次只调整说明与维护入口：README 改为 fork 差异摘要并链接原版；更新本页的保留结论与验证边界；新增 [迭代说明](docs/ITERATION.md)、[维护约定](AGENTS.md)、[bbdown-fork-iterate skill](skills/bbdown-fork-iterate/SKILL.md) 及其调用元数据。代码、SDK 和原始工作目录保持当前状态。
+该提交只调整说明与维护入口：README 改为 fork 差异摘要并链接原版；更新本页的保留结论与验证边界；新增 [迭代说明](docs/ITERATION.md)、[维护约定](AGENTS.md)、[bbdown-fork-iterate skill](skills/bbdown-fork-iterate/SKILL.md) 及其调用元数据。该提交没有修改代码、SDK 和原始工作目录。
 
 后续迭代按功能移植，更新本页实际完成的调整与验证记录。保持“已实现”“上游已覆盖”“计划中”“待验证”可区分，不提交原始对话、Cookie、密钥、签名地址、登录文件、下载媒体和构建缓存。
