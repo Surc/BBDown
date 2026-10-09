@@ -82,7 +82,7 @@ BBDown [选项] <URL或标识符>
 | | `--access-token` | `string ("")` | 设置 TV / APP 端 Access Token |
 | `-F` | `--file-pattern` | `string ("")` | 单 P 自定义输出文件名模板 |
 | `-M` | `--multi-file-pattern` | `string ("")` | 多 P 自定义输出文件名模板 |
-| | `--work-dir` | `string ("")` | 设置下载产物输出的工作目录 |
+| | `--work-dir` | `string ("")` | 设置下载产物输出的工作目录（未指定时默认程序目录下的 `Download` 文件夹） |
 | | `--config-file` | `string?` | 指定本地配置文件路径（默认读取 `BBDown.config`） |
 | | `--multi-thread` | `bool (true)` | 开启多线程并发分片下载（传 `false` 可关闭） |
 | | `--thread-segment-size` | `int (20)` | 多线程分片大小（单位：MB） |

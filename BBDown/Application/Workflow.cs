@@ -157,6 +157,9 @@ internal partial class Program
         {
             Logger.Log("视频为互动视频，暂时不支持tv下载，修改为默认下载");
             myOption.UseTvApi = false;
+            // 降级后不再消费 TV token，回到网页接口：本地没有网页 Cookie 时试看限制确实
+            // 适用，补打此前被 token 模式分流抑制的未登录横幅（互动视频 + 仅 token 用户）。
+            if (string.IsNullOrEmpty(Config.Current.Cookie)) LogNotLoggedInBanner();
         }
         // 与 Parser 的实际分派同源（此前这里是 TV > APP > INTL，而分派是 INTL > APP > TV，
         // 同时给出多个 --use-*-api 时展示值会与实际走的接口不一致）。
@@ -194,6 +197,9 @@ internal partial class Program
     /// 不会回流调用方）。CLI 下载、Serve 任务、订阅检查（SubCheck）、稍后再看（WatchLater）
     /// 都应先调用本方法并应用返回值，否则空间/收藏夹/合集等经 Parser.WbiSign 签名的请求
     /// 会用空 wbi 发出（B 站返回签名错误），本地凭据也会在返回后丢失。
+    /// 检测到未登录时按凭据构成分流提示（见 <see cref="ClassifyLoginNotice"/>）：
+    /// TV/APP/国际版模式已加载 access_token 时不再打印"你尚未登录…仅能试看 6 分钟"——
+    /// nav 只验证网页 Cookie，不代表这些按 token 鉴权的模式不可用（实际会误报）。
     /// 返回 null 表示无需更新（如 INTL/TV 模式且未加载到新凭据）。
     /// </summary>
     public static async Task<AppSettings?> InitializeRequestSessionAsync(MyOption myOption, CancellationToken cancellationToken = default)
@@ -231,7 +237,23 @@ internal partial class Program
             newWbi = wbi;
             if (!isLoggedIn)
             {
-                if (cookieExpired)
+                // nav 只验证网页 Cookie；TV/APP/国际版模式凭 access_token 鉴权
+                // （Parser.GetPlayJsonAsync 按模式消费 Config.Current.Token）。已加载
+                // token 时"未登录=只能试看 6 分钟"是误报——实际 playurl 完整成功；
+                // 按提示类型分流（纯函数，各组合由 LoginNoticeClassificationTests 钉住）。
+                var notice = ClassifyLoginNotice(
+                    isLoggedIn,
+                    cookieExpired,
+                    tokenModeActive: myOption.UseTvApi || myOption.UseAppApi || myOption.UseIntlApi,
+                    hasLoadedToken: !string.IsNullOrEmpty(token));
+                if (notice == LoginNoticeKind.TokenMode)
+                {
+                    // 只陈述凭据构成，不声称"以此模式下载"：互动视频会在取到视频信息后
+                    // 自动降级为默认下载（GetVideoInfoAsync 的 IsSteinGate 分支，届时
+                    // 不再消费 token 并补打未登录横幅），断言实际走的接口会失准。
+                    Logger.Log($"未检测到有效的网页登录（Cookie），已加载 {Parser.ApiModeLabel(Parser.ResolveApiMode(myOption.UseTvApi, myOption.UseIntlApi, myOption.UseAppApi))} 模式的 access_token。");
+                }
+                else if (notice == LoginNoticeKind.CookieExpired)
                 {
                     Logger.LogWarn("========================================");
                     Logger.LogWarn("  Cookie 已过期！");
@@ -240,14 +262,9 @@ internal partial class Program
                     Logger.LogWarn("  （若已执行 BBDown logintv，请加上 --use-tv-api）");
                     Logger.LogWarn("========================================");
                 }
-                else
+                else if (notice == LoginNoticeKind.NotLoggedIn)
                 {
-                    Logger.LogWarn("========================================");
-                    Logger.LogWarn("  你尚未登录B站账号！");
-                    Logger.LogWarn("  未登录状态下仅能下载6分钟试看片段。");
-                    Logger.LogWarn("  请运行 BBDown login 扫码登录以获取完整视频。");
-                    Logger.LogWarn("  （若已执行 BBDown logintv，请在下载命令中加上 --use-tv-api）");
-                    Logger.LogWarn("========================================");
+                    LogNotLoggedInBanner();
                 }
             }
         }
@@ -259,5 +276,47 @@ internal partial class Program
         if (session == current) return null;
         return session;
     }
+
+    /// <summary>登录提示类型（见 <see cref="ClassifyLoginNotice"/>）。</summary>
+    internal enum LoginNoticeKind
+    {
+        /// <summary>已登录：不打印登录提示。</summary>
+        None,
+        /// <summary>TV/APP/国际版模式且已加载 access_token：Cookie 状态不影响下载，打印中性说明。</summary>
+        TokenMode,
+        /// <summary>本地持有 Cookie 但已失效：提示重新扫码。</summary>
+        CookieExpired,
+        /// <summary>无 Cookie 且无 token 模式可用：提示未登录（试看限制确实适用）。</summary>
+        NotLoggedIn,
+    }
+
+    /// <summary>
+    /// 未登录横幅（文案原样保留）。除登录检测的 NotLoggedIn 分支外，互动视频降级时
+    /// （见 <see cref="GetVideoInfoAsync"/> 的 IsSteinGate 分支）复用——该场景下
+    /// token 模式已不再适用，试看限制确实成立。
+    /// </summary>
+    private static void LogNotLoggedInBanner()
+    {
+        Logger.LogWarn("========================================");
+        Logger.LogWarn("  你尚未登录B站账号！");
+        Logger.LogWarn("  未登录状态下仅能下载6分钟试看片段。");
+        Logger.LogWarn("  请运行 BBDown login 扫码登录以获取完整视频。");
+        Logger.LogWarn("  （若已执行 BBDown logintv，请在下载命令中加上 --use-tv-api）");
+        Logger.LogWarn("========================================");
+    }
+
+    /// <summary>
+    /// 登录提示分类（纯函数，供单测直接覆盖各组合）：nav 接口只按 Cookie 判定登录，
+    /// 不能代表 TV/APP/国际版模式的授权状态——这些模式按 access_token 鉴权，
+    /// 已加载 token 时必须抑制"只能试看 6 分钟/请加 --use-tv-api"这类误报
+    /// （命令已带 -t 时该建议也无意义）。token 与模式必须同时具备：
+    /// 仅显式传 --access-token 而不开启 token 模式时，WEB 播放接口并不消费它。
+    /// </summary>
+    internal static LoginNoticeKind ClassifyLoginNotice(
+        bool isLoggedIn, bool cookieExpired, bool tokenModeActive, bool hasLoadedToken)
+        => isLoggedIn ? LoginNoticeKind.None
+            : tokenModeActive && hasLoadedToken ? LoginNoticeKind.TokenMode
+            : cookieExpired ? LoginNoticeKind.CookieExpired
+            : LoginNoticeKind.NotLoggedIn;
 
 }

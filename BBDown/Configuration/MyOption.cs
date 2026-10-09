@@ -224,7 +224,7 @@ public class MyOption : CommandSettings
     public string Aria2cArgs { get; set; } = "";
 
     [CommandOption("--work-dir")]
-    [Description("设置程序的工作目录")]
+    [Description("设置程序的工作目录(默认: 程序目录下的 Download 文件夹)")]
     public string WorkDir { get; set; } = "";
 
     [CommandOption("--ffmpeg-path")]

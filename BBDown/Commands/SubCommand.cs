@@ -191,9 +191,15 @@ public class SubCheckCommand : AsyncCommand<SubCheckSettings>
         // -w 已由 ExecuteAsync 经 TryResolveWorkDir 绝对化且只解析一次（RF-89）：本方法内不得
         // 再解析——循环前的解析点不在任何 try 内，抛出的 ArgumentException 会逃出命令级
         // 异常过滤器（ExecuteAsync 只捕获 OperationCanceledException）。
-        // --per-sub-dir 的基目录：空 -w 时用检查启动时的 CWD（下载过程中 ChangeWorkingDir
-        // 会写进程 CWD，相对路径到第二个订阅会漂移，须先捕获）。
-        string baseWorkDir = settings.WorkDir.Length == 0 ? Directory.GetCurrentDirectory() : settings.WorkDir;
+        // --per-sub-dir 的基目录（见 Program.ResolvePerSubBaseWorkDir）：空 -w 时用与
+        // ChangeWorkingDir 同源的默认下载目录（程序目录下的 Download），默认目录不可
+        // 创建时回落检查启动时的 CWD；基目录必须先于逐订阅循环定下（下载过程中
+        // ChangeWorkingDir 会写进程 CWD，相对路径到第二个订阅会漂移，须先捕获）。
+        // 仅在开启 --per-sub-dir 时解析：关闭时 baseWorkDir 不参与任何路径，
+        // 解析会无谓地创建默认目录、产生与本次运行无关的告警。
+        string baseWorkDir = settings.PerSubDir
+            ? Program.ResolvePerSubBaseWorkDir(settings.WorkDir)
+            : settings.WorkDir;
         // 名称槽位每个订阅都占用（与是否有新增无关），冲突序号才能跨 run 稳定
         var usedSubDirs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 

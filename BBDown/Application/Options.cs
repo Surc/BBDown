@@ -149,19 +149,44 @@ internal partial class Program
     /// <exception cref="Exception"></exception>
     private static void FindBinaries(MyOption myOption)
     {
-        if (!string.IsNullOrEmpty(myOption.FFmpegPath) && File.Exists(myOption.FFmpegPath))
+        // 显式工具/设备路径在采纳前统一绝对化：相对路径的语义是"相对启动时目录"
+        // （下方 File.Exists 校验正是在启动 CWD 下做的），而 ChangeWorkingDir 之后
+        // CLI 无 -w 时进程 CWD 已切到默认下载目录——混流/下载/解密子进程与 Decrypt
+        // 的运行期 File.Exists 都会按新 CWD 解析同一相对串而找不到文件（此前无 -w
+        // 不切 CWD，同一命令行本可正常工作）。不存在的路径保持原样，交由下方告警
+        // 与回退逻辑处理。
+        myOption.FFmpegPath = AbsoluteIfExists(myOption.FFmpegPath);
+        myOption.Mp4boxPath = AbsoluteIfExists(myOption.Mp4boxPath);
+        myOption.Aria2cPath = AbsoluteIfExists(myOption.Aria2cPath);
+        myOption.WvdPath = AbsoluteIfExists(myOption.WvdPath);
+        myOption.Mp4decryptPath = AbsoluteIfExists(myOption.Mp4decryptPath);
+
+        // 显式指定的路径不存在时告警而非静默回退：此前 File.Exists 短路后直接去
+        // APP_DIR/PATH 找同名程序——用户以为在用自己指定的版本（GUI 预填的路径
+        // 实际不存在时尤为隐蔽）；且两个来源都失败时报错仍建议"使用 --ffmpeg-path
+        // 指定路径"，而用户明明指定了。
+        if (!string.IsNullOrEmpty(myOption.FFmpegPath))
         {
-            BBDownMuxer.FFMPEG = myOption.FFmpegPath;
+            if (File.Exists(myOption.FFmpegPath))
+                BBDownMuxer.FFMPEG = myOption.FFmpegPath;
+            else
+                Logger.LogWarn($"--ffmpeg-path 指定的文件不存在: {myOption.FFmpegPath}，将回退到程序目录/PATH 查找 ffmpeg");
         }
 
-        if (!string.IsNullOrEmpty(myOption.Mp4boxPath) && File.Exists(myOption.Mp4boxPath))
+        if (!string.IsNullOrEmpty(myOption.Mp4boxPath))
         {
-            BBDownMuxer.MP4BOX = myOption.Mp4boxPath;
+            if (File.Exists(myOption.Mp4boxPath))
+                BBDownMuxer.MP4BOX = myOption.Mp4boxPath;
+            else
+                Logger.LogWarn($"--mp4box-path 指定的文件不存在: {myOption.Mp4boxPath}，将回退到程序目录/PATH 查找 mp4box");
         }
 
-        if (!string.IsNullOrEmpty(myOption.Aria2cPath) && File.Exists(myOption.Aria2cPath))
+        if (!string.IsNullOrEmpty(myOption.Aria2cPath))
         {
-            BBDownAria2c.ARIA2C = myOption.Aria2cPath;
+            if (File.Exists(myOption.Aria2cPath))
+                BBDownAria2c.ARIA2C = myOption.Aria2cPath;
+            else
+                Logger.LogWarn($"--aria2c-path 指定的文件不存在: {myOption.Aria2cPath}，将回退到程序目录/PATH 查找 aria2c");
         }
         //寻找ffmpeg或mp4box
         if (!myOption.SkipMux)
@@ -202,6 +227,30 @@ internal partial class Program
                 BBDownAria2c.ARIA2C = binPath;
             }
 
+        }
+    }
+
+    /// <summary>供测试使用：直接执行二进制查找/告警逻辑，不触碰其余启动流程。</summary>
+    internal static void FindBinariesForTest(MyOption myOption) => FindBinaries(myOption);
+
+    /// <summary>
+    /// 启动时确实存在的路径 → 解析为绝对路径；否则原样返回（不存在的路径交由调用方的
+    /// 告警与回退逻辑处理）。见 <see cref="FindBinaries"/> 顶部说明：绝对化的目的
+    /// 是让显式工具路径不再受后续 <see cref="ChangeWorkingDir"/> 的 CWD 切换影响。
+    /// </summary>
+    private static string AbsoluteIfExists(string path)
+    {
+        if (string.IsNullOrEmpty(path) || !File.Exists(path)) return path;
+        try
+        {
+            return Path.GetFullPath(path);
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException
+                                    or IOException or UnauthorizedAccessException
+                                    or System.Security.SecurityException)
+        {
+            // File.Exists 已通过，这里近乎不可达；保守保持原值（按原语义回退/告警）
+            return path;
         }
     }
 
@@ -264,15 +313,43 @@ internal partial class Program
         }
     }
 
+    /// <summary>未指定 --work-dir 时的默认下载目录：程序目录下的 Download 文件夹。</summary>
+    internal static string DefaultWorkDir => Path.Combine(APP_DIR, "Download");
+
     /// <summary>
-    /// 设置用户输入的自定义工作目录。返回解析后的绝对目录（未设置返回空串），
-    /// 由调用方并入 <see cref="AppSettings.WorkDir"/> 写入任务流配置——
-    /// SetUpWork 后续会整体 Config.Apply 一个新 AppSettings，这里若自行写入配置会被覆盖。
+    /// 默认下载目录的提示只打一次：sub check / watchlater 的逐任务循环会反复进入本方法，
+    /// 重复打印会刷屏。成功提示（ChangeWorkingDir）与不可创建告警（ResolveDefaultWorkDir）
+    /// 共用本门控——同一目录的可创建性不会在一次运行中翻转，两者不会先后出现。
+    /// </summary>
+    private static bool _loggedDefaultWorkDir;
+
+    /// <summary>
+    /// 设置工作目录。返回解析后的绝对目录，由调用方并入 <see cref="AppSettings.WorkDir"/>
+    /// 写入任务流配置——SetUpWork 后续会整体 Config.Apply 一个新 AppSettings，
+    /// 这里若自行写入配置会被覆盖。
+    /// 未指定 --work-dir（且非 serve）时回落到 <see cref="DefaultWorkDir"/>：
+    /// 此前回落进程 CWD，产物位置随运行命令的目录漂移；GUI 恒传 --work-dir
+    /// （默认 &lt;程序目录&gt;\Download），两条路径的默认落点已不一致。
     /// </summary>
     /// <param name="myOption"></param>
     internal static string ChangeWorkingDir(MyOption myOption)
     {
         var dir = ResolveWorkDir(myOption.WorkDir);
+        if (dir == "" && !Config.Current.IsServeMode)
+        {
+            // serve 不适用默认目录：SanitizeUntrustedOptions 强制清空客户端 WorkDir
+            // （防"客户端控制服务端输出位置"的任意写面），serve 任务固定输出到服务端 CWD。
+            var defaultDir = ResolveDefaultWorkDir();
+            if (defaultDir != "")
+            {
+                dir = defaultDir;
+                if (!_loggedDefaultWorkDir)
+                {
+                    _loggedDefaultWorkDir = true;
+                    Logger.Log($"未指定工作目录，使用默认下载目录：{dir}（可用 --work-dir 自定义）");
+                }
+            }
+        }
         if (dir != "")
         {
             // CLI 单任务模式仍写进程 CWD：ffmpeg/aria2c 等子进程与外部工具按相对路径
@@ -283,6 +360,37 @@ internal partial class Program
             Logger.LogDebug("切换工作目录至：{0}", dir);
         }
         return dir;
+    }
+
+    /// <summary>
+    /// <see cref="DefaultWorkDir"/> 的绝对路径（展开环境变量、必要时创建目录）；
+    /// 创建失败（程序目录不可写等）时告警并返回空串，调用方回落到进程 CWD 语义——
+    /// 默认目录属便利性回落，不能因不可创建让下载直接失败。
+    /// </summary>
+    internal static string ResolveDefaultWorkDir()
+    {
+        if (TryResolveWorkDir(DefaultWorkDir, out var dir, out var error)) return dir;
+        if (!_loggedDefaultWorkDir)
+        {
+            _loggedDefaultWorkDir = true;
+            Logger.LogWarn($"无法创建默认下载目录 <{DefaultWorkDir}>（{error}），将使用当前目录");
+        }
+        return "";
+    }
+
+    /// <summary>
+    /// <c>sub check --per-sub-dir</c> 的基目录（仅该选项开启时调用）：显式 -w 已由
+    /// <see cref="TryResolveWorkDir"/> 绝对化，原样使用；未指定时与
+    /// <see cref="ChangeWorkingDir"/> 同源——默认下载目录（<see cref="DefaultWorkDir"/>），
+    /// 不可创建时回落调用时刻的 CWD（此时 ChangeWorkingDir 同样回落 CWD 语义，二者一致）。
+    /// 调用方必须在逐订阅循环**之前**取值：下载过程中 ChangeWorkingDir 会写进程 CWD，
+    /// 留到循环内解析会逐订阅漂移。
+    /// </summary>
+    internal static string ResolvePerSubBaseWorkDir(string workDir)
+    {
+        if (workDir.Length != 0) return workDir;
+        var dir = ResolveDefaultWorkDir();
+        return dir.Length != 0 ? dir : Directory.GetCurrentDirectory();
     }
 
     /// <summary>

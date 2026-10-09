@@ -55,7 +55,7 @@ public abstract class DownloadOptionSettings : SubSettings
     public bool UseIntlApi { get; set; }
 
     [CommandOption("-w|--work-dir")]
-    [Description("设置工作目录(所有相对路径的根目录)")]
+    [Description("设置工作目录(所有相对路径的根目录; 默认: 程序目录下的 Download 文件夹)")]
     public string WorkDir { get; set; } = "";
 
     /// <summary>
