@@ -148,6 +148,37 @@ public class WorkDirResolutionTests
     }
 
     [Fact]
+    public void ChangeWorkingDir_CliMode_NoWorkDir_FallsBackToProgramDownloadDir()
+    {
+        // 未指定 --work-dir 时默认输出到 <程序目录>\Download（与 GUI 的默认落点一致），
+        // 不再落到运行命令时的 CWD；CLI 单任务语义仍写进程 CWD（子进程相对路径依赖）。
+        var originalServeMode = Program.IsServeMode;
+        var originalCwd = Environment.CurrentDirectory;
+        var expected = Path.Combine(Program.APP_DIR, "Download");
+        try
+        {
+            Program.IsServeMode = false;
+            var resolved = Program.ChangeWorkingDir(new MyOption());
+            Assert.Equal(expected, resolved);
+            Assert.True(Path.IsPathFullyQualified(resolved), "默认目录必须是绝对路径");
+            Assert.True(Directory.Exists(resolved), "应自动创建默认下载目录");
+            Assert.Equal(resolved, Environment.CurrentDirectory);
+        }
+        finally
+        {
+            Program.IsServeMode = originalServeMode;
+            Environment.CurrentDirectory = originalCwd;
+            // 仅在空目录时清理（不侵占真实数据；测试环境中该目录由本测试创建）
+            try
+            {
+                if (Directory.Exists(expected) && !Directory.EnumerateFileSystemEntries(expected).Any())
+                    Directory.Delete(expected);
+            }
+            catch (IOException) { }
+        }
+    }
+
+    [Fact]
     public void SetUpWork_WorkDir_IsAppliedToTaskFlow_WithoutWritingCwd()
     {
         var originalServeMode = Program.IsServeMode;
@@ -173,6 +204,84 @@ public class WorkDirResolutionTests
             Config.Apply(originalConfig);
             try { Directory.Delete(dir, true); } catch (IOException) { }
         }
+    }
+
+    [Fact]
+    public void ResolvePerSubBaseWorkDir_NoWorkDir_FallsBackToDefaultWorkDir_NotStartupCwd()
+    {
+        // sub check --per-sub-dir 无 -w 的基目录必须与 ChangeWorkingDir 同源（程序目录
+        // Download），而不是启动时的 CWD——否则同一命令加/不加 --per-sub-dir 的默认根分裂
+        // （不加时任务经 ChangeWorkingDir 落默认目录，加了却落启动目录）。
+        var originalCwd = Environment.CurrentDirectory;
+        var expected = Path.Combine(Program.APP_DIR, "Download");
+        try
+        {
+            Environment.CurrentDirectory = Path.GetTempPath(); // 与 APP_DIR 不同，保证断言有区分度
+            Assert.Equal(expected, Program.ResolvePerSubBaseWorkDir(""));
+            // 显式 -w（已由 TryResolveWorkDir 绝对化）原样透传，不再解析
+            Assert.Equal("wd-x", Program.ResolvePerSubBaseWorkDir("wd-x"));
+        }
+        finally
+        {
+            Environment.CurrentDirectory = originalCwd;
+            // 仅在空目录时清理（不侵占真实数据；测试环境中该目录由本测试创建）
+            try
+            {
+                if (Directory.Exists(expected) && !Directory.EnumerateFileSystemEntries(expected).Any())
+                    Directory.Delete(expected);
+            }
+            catch (IOException) { }
+        }
+    }
+
+    [Fact]
+    public void ChangeWorkingDir_DefaultDirNotice_LoggedAtMostOnce()
+    {
+        // 默认目录提示只打印一次：watchlater / sub check 的逐任务循环会反复进入
+        // ChangeWorkingDir，重复打印会刷屏。静态门控跨用例残留（同进程先前用例可能
+        // 已触发过一次），故断言"第一次至多一条、第二次不再新增"，而非"第一次必然恰好一条"。
+        var logPath = Path.Combine(Path.GetTempPath(), $"bbdown-wdlog-{Guid.NewGuid():N}.txt");
+        var originalLogPath = Logger.LogFilePath;
+        var originalServeMode = Program.IsServeMode;
+        var originalCwd = Environment.CurrentDirectory;
+        try
+        {
+            Logger.LogFilePath = logPath;
+            Program.IsServeMode = false;
+            Program.ChangeWorkingDir(new MyOption());
+            var afterFirst = CountOccurrences(ReadLogOrEmpty(logPath), "使用默认下载目录");
+            Program.ChangeWorkingDir(new MyOption());
+            var afterSecond = CountOccurrences(ReadLogOrEmpty(logPath), "使用默认下载目录");
+            Assert.InRange(afterFirst, 0, 1);
+            Assert.Equal(afterFirst, afterSecond);
+        }
+        finally
+        {
+            Logger.LogFilePath = originalLogPath;
+            Logger.CloseFile();
+            Program.IsServeMode = originalServeMode;
+            Environment.CurrentDirectory = originalCwd;
+            try { if (File.Exists(logPath)) File.Delete(logPath); } catch (IOException) { }
+        }
+    }
+
+    private static string ReadLogOrEmpty(string path)
+    {
+        if (!File.Exists(path)) return "";
+        using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        using var reader = new StreamReader(fs);
+        return reader.ReadToEnd();
+    }
+
+    private static int CountOccurrences(string text, string substring)
+    {
+        int count = 0, index = 0;
+        while ((index = text.IndexOf(substring, index, StringComparison.Ordinal)) >= 0)
+        {
+            count++;
+            index += substring.Length;
+        }
+        return count;
     }
 
     // ── RF-89/RF-90：多任务命令的 -w 只解析一次（防相对 -w 在 CWD 漂移后嵌套）──

@@ -23,7 +23,7 @@
 
 ![BBDown 命令行下载演示动图](https://user-images.githubusercontent.com/20772925/88686407-a2001480-d129-11ea-8aac-97a0c71af115.gif)
 
-下载完毕后在当前目录即可看到混流完成的 MP4 文件：
+下载完毕后默认在程序目录下的 `Download` 文件夹里即可看到混流完成的 MP4 文件（可用 `--work-dir` 更改）：
 
 ![下载结果：目录中生成的 MP4 文件截图](https://user-images.githubusercontent.com/20772925/88478901-5e1cdc00-cf7e-11ea-97c1-154b9226564e.png)
 
@@ -111,7 +111,7 @@ BBDown --help
 | `--aria2c-path` / `--aria2c-args` | 指定 aria2c 路径 / 额外参数 |
 | `--ffmpeg-path` / `--mp4box-path` | 指定混流工具路径 |
 | `--use-mp4box` | 使用 mp4box 混流 |
-| `--work-dir` | 指定下载工作目录 |
+| `--work-dir` | 指定下载工作目录（未指定时默认程序目录下的 `Download` 文件夹） |
 | `--insecure` | 跳过 SSL 证书校验 |
 
 断点续传会校验资源身份与分片布局。修改 `--thread-segment-size` 后，旧布局的分片会重新下载；旧版缺少布局信息的多线程续传清单也会触发一次重新下载。使用 aria2c 时，仍有 `.aria2` 控制文件的目标会交给 aria2c 恢复，即使预分配后的文件长度已经等于远端总长。

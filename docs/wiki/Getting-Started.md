@@ -114,7 +114,7 @@ BBDown -p ALL "https://www.bilibili.com/bangumi/play/ss33073"
 
 ## 4. 输出产物与临时文件解析
 
-下载完成后，BBDown 会在当前工作目录下产出以下文件：
+下载完成后，BBDown 会在工作目录下产出以下文件（未指定 `--work-dir` 时默认为程序目录下的 `Download` 文件夹；`live` / `article` 子命令例外，未指定时仍为当前目录）：
 
 ```
 工作目录/

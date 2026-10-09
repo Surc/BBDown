@@ -34,7 +34,7 @@ public class DownloadOptionSettingsTests
         ["UseAppApi"] = ("-a|--use-app-api", "使用APP端解析模式"),
         ["UseTvApi"] = ("-t|--use-tv-api", "使用TV端解析模式"),
         ["UseIntlApi"] = ("|--use-intl-api", "使用国际版解析模式"),
-        ["WorkDir"] = ("-w|--work-dir", "设置工作目录(所有相对路径的根目录)"),
+        ["WorkDir"] = ("-w|--work-dir", "设置工作目录(所有相对路径的根目录; 默认: 程序目录下的 Download 文件夹)"),
     };
 
     private static readonly Type[] DownloadCommands = [typeof(WatchLaterSettings), typeof(SubCheckSettings)];
