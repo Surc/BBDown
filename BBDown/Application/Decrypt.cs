@@ -120,68 +120,49 @@ internal partial class Program
 
     private static async Task RunDecryptAsync(string mp4decrypt, string kid, string key, string input, string output, CancellationToken token = default)
     {
-        // Write key to a temp file to avoid exposing it on the command line
-        // (visible via ps aux / /proc/<pid>/cmdline to other local users)
-        var keyFile = Path.GetTempFileName();
+        // 官方 Bento4 的 mp4decrypt 只支持 --key <kid>:<key>，没有 --key-file 选项，
+        // 传 --key-file 会被当作输入文件名解析导致失败。密钥会出现在进程命令行上，
+        // 对有权限查看进程参数的本机用户可见；这是兼容官方工具的取舍。
+        var psi = new ProcessStartInfo
+        {
+            FileName = mp4decrypt,
+            Arguments = $"--key \"{kid}:{key}\" \"{input}\" \"{output}\"",
+            RedirectStandardOutput = false,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+
+        using var proc = Process.Start(psi);
+        if (proc is null)
+            throw new InvalidOperationException($"mp4decrypt 无法启动: {mp4decrypt}（进程启动失败）");
+        var stderrTask = proc.StandardError.ReadToEndAsync();
         try
         {
-            await File.WriteAllTextAsync(keyFile, $"{kid}:{key}", token);
-
-            var psi = new ProcessStartInfo
-            {
-                FileName = mp4decrypt,
-                Arguments = $"--key-file \"{keyFile}\" \"{input}\" \"{output}\"",
-                RedirectStandardOutput = false,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-            };
-
-            using var proc = Process.Start(psi);
-            if (proc is null)
-                throw new InvalidOperationException($"mp4decrypt 无法启动: {mp4decrypt}（进程启动失败）");
-            var stderrTask = proc.StandardError.ReadToEndAsync();
-            try
-            {
-                // 解密无超时兜底会让进程无限挂起：用混流超时配置作上限（与外部进程执行器一致）。
-                // 达到超时同样 Kill 进程树并抛错，不留下孤儿 mp4decrypt。
-                using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(token);
-                timeoutCts.CancelAfter(TimeSpan.FromMinutes(Math.Max(1, Core.Config.Current.MuxerTimeoutMinutes)));
-                await proc.WaitForExitAsync(timeoutCts.Token);
-            }
-            catch (OperationCanceledException)
-            {
-                // 用户取消或超时：进程仍在运行，必须 Kill 掉，避免留下孤儿 mp4decrypt。
-                try { proc.Kill(true); } catch { /* 进程可能已自行退出 */ }
-                throw;
-            }
-
-            if (proc.ExitCode != 0)
-            {
-                var err = await stderrTask;
-                try { if (File.Exists(output)) File.Delete(output); } catch (IOException) { }
-                throw new InvalidOperationException($"mp4decrypt 解密失败 (code={proc.ExitCode}): {err}");
-            }
-            // 进程退出 0 但未产出有效文件：静默忽略会让调用方保留原加密文件、
-            // 任务却继续"解密成功"。这里把缺失输出当作失败抛出。
-            if (!File.Exists(output) || new FileInfo(output).Length == 0)
-            {
-                throw new InvalidOperationException("mp4decrypt 退出码为 0 但未产出有效的解密文件");
-            }
+            // 解密无超时兜底会让进程无限挂起：用混流超时配置作上限（与外部进程执行器一致）。
+            // 达到超时同样 Kill 进程树并抛错，不留下孤儿 mp4decrypt。
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(token);
+            timeoutCts.CancelAfter(TimeSpan.FromMinutes(Math.Max(1, Core.Config.Current.MuxerTimeoutMinutes)));
+            await proc.WaitForExitAsync(timeoutCts.Token);
         }
-        finally
+        catch (OperationCanceledException)
         {
-            // Securely delete the temp key file
-            try
-            {
-                if (File.Exists(keyFile))
-                {
-                    // Overwrite before delete to prevent recovery
-                    await File.WriteAllTextAsync(keyFile, new string('\0', 64));
-                    File.Delete(keyFile);
-                }
-            }
-            catch (IOException) { /* best effort */ }
+            // 用户取消或超时：进程仍在运行，必须 Kill 掉，避免留下孤儿 mp4decrypt。
+            try { proc.Kill(true); } catch { /* 进程可能已自行退出 */ }
+            throw;
+        }
+
+        if (proc.ExitCode != 0)
+        {
+            var err = await stderrTask;
+            try { if (File.Exists(output)) File.Delete(output); } catch (IOException) { }
+            throw new InvalidOperationException($"mp4decrypt 解密失败 (code={proc.ExitCode}): {err}");
+        }
+        // 进程退出 0 但未产出有效文件：静默忽略会让调用方保留原加密文件、
+        // 任务却继续"解密成功"。这里把缺失输出当作失败抛出。
+        if (!File.Exists(output) || new FileInfo(output).Length == 0)
+        {
+            throw new InvalidOperationException("mp4decrypt 退出码为 0 但未产出有效的解密文件");
         }
     }
 

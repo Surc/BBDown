@@ -15,7 +15,7 @@ public static partial class Parser
         return $"{api}&w_rid=" + Convert.ToHexStringLower(MD5.HashData(Encoding.UTF8.GetBytes(api + Config.Current.Wbi)));
     }
 
-    private static async Task<string> GetPlayJsonAsync(string encoding, string aidOri, string aid, string cid, string epId, bool tvApi, bool intl, bool appApi, bool wantDrm, string qn = "0", CancellationToken token = default)
+    private static async Task<string> GetPlayJsonAsync(string encoding, string aidOri, string aid, string cid, string epId, bool tvApi, bool intl, bool appApi, bool wantDrm, string qn = "0", CancellationToken token = default, bool legacy = false)
     {
         Logger.LogDebug("aid={0},cid={1},epId={2},tvApi={3},IntlApi={4},appApi={5},qn={6}", aid, cid, epId, tvApi, intl, appApi, qn);
 
@@ -47,12 +47,12 @@ public static partial class Parser
         {
             // 尝试提高可读性
             StringBuilder apiBuilder = new();
-            apiBuilder.Append($"support_multi_audio=true&from_client=BROWSER&avid={aid}&cid={cid}&fnval=4048&fnver=0&fourk=1");
+            apiBuilder.Append($"support_multi_audio=true&from_client=BROWSER&avid={aid}&cid={cid}&fnval={(legacy ? "0" : "4048")}&fnver=0&fourk=1");
             if (Config.Current.Area != "") apiBuilder.Append($"&access_key={Config.Current.Token}&area={Config.Current.Area}");
             apiBuilder.Append($"&otype=json&qn={qn}");
             if (bangumi) apiBuilder.Append($"&module=bangumi&ep_id={epId}&session=");
             if (Config.Current.Cookie == "" && !wantDrm) apiBuilder.Append("&try_look=1");
-            if (wantDrm) apiBuilder.Append("&drm_tech_type=2");
+            if (wantDrm && !legacy) apiBuilder.Append("&drm_tech_type=2");
             apiBuilder.Append($"&wts={GetTimeStamp(true)}");
             api = prefix + (bangumi ? apiBuilder.ToString() : WbiSign(apiBuilder.ToString()));
         }
@@ -107,8 +107,12 @@ public static partial class Parser
     {
         ParsedResult parsedResult = new();
 
+        // 初始以 DASH（fnval=4048）请求；若 play_check 报付费限制，
+        // 在下方 catch 中回退 legacy（fnval=0）并置位，供 durl 分支复用
+        bool legacy = false;
+
         //调用解析
-        parsedResult.WebJsonString = await GetPlayJsonAsync(encoding, aidOri, aid, cid, epId, tvApi, intlApi, appApi, wantDrm, qn, token);
+        parsedResult.WebJsonString = await GetPlayJsonAsync(encoding, aidOri, aid, cid, epId, tvApi, intlApi, appApi, wantDrm, qn, token, legacy);
 
         // 调试日志不记录完整播放 JSON：其中包含带签名的媒体地址（deadline/sign 参数），
         // 全文落盘会把可用的临时签名 URL 写进日志文件。只记录长度 + 前 1KB 摘要，
@@ -195,6 +199,20 @@ public static partial class Parser
             ThrowIfPlayLimited(data);
             // UGC 的播放限制通过顶层业务 code 表达（区域限制 -86038、风控 -412、视频失效 -404 等），
             // 而 play_check 只在 pgc 响应的 result 节点出现、对 UGC 不可达，这里统一兜底
+            ThrowIfBizError(data);
+        }
+        catch (InvalidOperationException ex) when (ex.Message.Contains("播放限制") && !legacy)
+        {
+            // 部分付费集 DASH（fnval=4048）接口返回 PAY/PLAY_PREVIEW 不可整片播放，
+            // 但 legacy MP4（fnval=0）接口可能仍返回 play_detail=PLAY_WHOLE 可整片播放。
+            // 此时回退到 legacy 格式重新请求，走下方 durl（FLV/MP4）分支。
+            Logger.Log("DASH 接口存在播放限制，回退尝试 legacy MP4 接口...");
+            legacy = true;
+            parsedResult.WebJsonString = await GetPlayJsonAsync(encoding, aidOri, aid, cid, epId, tvApi, intlApi, appApi, wantDrm, qn, token, legacy: true);
+            respJson.Dispose();
+            respJson = JsonDocument.Parse(parsedResult.WebJsonString);
+            data = respJson.RootElement;
+            ThrowIfPlayLimited(data);
             ThrowIfBizError(data);
         }
         catch
@@ -465,7 +483,7 @@ public static partial class Parser
             else if (root.TryGetProperty("durl", out _)) //flv
             {
                 //默认以最高清晰度解析
-                parsedResult.WebJsonString = await GetPlayJsonAsync(encoding, aidOri, aid, cid, epId, tvApi, intlApi, appApi, wantDrm, GetMaxQn(), token);
+                parsedResult.WebJsonString = await GetPlayJsonAsync(encoding, aidOri, aid, cid, epId, tvApi, intlApi, appApi, wantDrm, GetMaxQn(), token, legacy);
                 respJson.Dispose();
                 respJson = JsonDocument.Parse(parsedResult.WebJsonString);
                 var newData = respJson.RootElement;
@@ -565,6 +583,11 @@ public static partial class Parser
         var reason = playCheck.GetValueAsStringSafe("limit_play_reason");
         var detail = playCheck.GetValueAsStringSafe("play_detail");
         if (string.IsNullOrWhiteSpace(reason) && string.IsNullOrWhiteSpace(detail))
+            return;
+
+        // play_detail=PLAY_WHOLE 表示整片可播（配合 --decrypt-drm 时接口以此值表达
+        // 授权成功），不属于播放限制，直接放行
+        if (detail == "PLAY_WHOLE")
             return;
 
         var message = reason switch

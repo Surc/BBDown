@@ -47,6 +47,48 @@ public class MuxerArgsTests
         catch { /* 清理失败不影响测试结论 */ }
     }
 
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task MuxAV_WithCover_DispositionFollowsAllInputs(bool audioOnly, bool withChapters)
+    {
+        var fake = new FakeProcessRunner(exitCode: 0);
+        var original = BBDownMuxer.ProcessRunner;
+        var tempDir = NewTempDir();
+        try
+        {
+            BBDownMuxer.ProcessRunner = fake;
+            var videoPath = Path.Combine(tempDir, "video.mp4");
+            var audioPath = Path.Combine(tempDir, "audio.m4a");
+            var coverPath = Path.Combine(tempDir, "cover.jpg");
+            File.WriteAllText(videoPath, "v");
+            File.WriteAllText(audioPath, "a");
+            File.WriteAllText(coverPath, "cover");
+            List<ViewPoint>? points = withChapters
+                ? [new() { title = "Chapter", start = 0, end = 1 }]
+                : null;
+
+            await BBDownMuxer.MuxAV(false, "BVtest", videoPath, audioPath, [],
+                Path.Combine(tempDir, "out.mp4"), pic: coverPath, audioOnly: audioOnly, points: points);
+
+            var args = fake.Specs.Single(s => s.FileName == "ffmpeg").Arguments;
+            var disposition = args.IndexOf(audioOnly ? "-disposition:v:0" : "-disposition:v:1");
+            Assert.True(disposition > args.LastIndexOf("-i") + 1,
+                "封面 disposition 必须在全部输入及其文件名之后");
+            Assert.Equal("attached_pic", args[disposition + 1]);
+            Assert.Single(args, a => a.StartsWith("-disposition:"));
+            if (withChapters)
+                Assert.Contains(args, a => a.Contains("chapters-"));
+        }
+        finally
+        {
+            BBDownMuxer.ProcessRunner = original;
+            CleanupDir(tempDir);
+        }
+    }
+
     /// <summary>
     /// 章节下标快照测试：points 场景下 meta 文件作为最后一个输入加入，
     /// -map_chapters 的下标应是递增前的 inputCount（即 meta 文件自身下标），

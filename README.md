@@ -8,6 +8,8 @@
 
 命令行式哔哩哔哩下载器 · Bilibili Downloader
 
+本 fork 的 `fix/local-playback-decrypt-mux` 分支保存基于 v1.6.11 的本地修复。完整的改动原因、实现细节、测试结果和兼容性取舍见 [本地修改说明](LOCAL_CHANGES.md)。
+
 一条命令完成链接解析、多线程下载与音视频混流，支持 8K / HDR / 杜比视界 / 杜比全景声，以及原生 C# 实现的 Widevine DRM 解密。
 
 <a name="演示"></a>

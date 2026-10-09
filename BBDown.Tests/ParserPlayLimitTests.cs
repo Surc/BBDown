@@ -5,6 +5,30 @@ namespace BBDown.Tests;
 
 public class ParserPlayLimitTests
 {
+    [Theory]
+    [InlineData("")]
+    [InlineData("PAY")]
+    public void ThrowIfPlayLimited_PlayWhole_DoesNotThrow(string reason)
+    {
+        var json = JsonSerializer.Serialize(new
+        {
+            code = 0,
+            result = new { play_check = new { limit_play_reason = reason, play_detail = "PLAY_WHOLE" } }
+        });
+        using var doc = JsonDocument.Parse(json);
+        Parser.ThrowIfPlayLimited(doc.RootElement);
+    }
+
+    [Fact]
+    public void ThrowIfPlayLimited_PayPreview_RemainsRestricted()
+    {
+        const string json = """{"code":0,"result":{"play_check":{"limit_play_reason":"PAY","play_detail":"PLAY_PREVIEW"}}}""";
+        using var doc = JsonDocument.Parse(json);
+        var ex = Assert.Throws<InvalidOperationException>(() => Parser.ThrowIfPlayLimited(doc.RootElement));
+        Assert.Contains("PAY", ex.Message);
+        Assert.Contains("PLAY_PREVIEW", ex.Message);
+    }
+
     [Fact]
     public void ThrowIfPlayLimited_AreaLimit_ThrowsClearMessage()
     {

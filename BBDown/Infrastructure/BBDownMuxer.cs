@@ -229,13 +229,6 @@ static partial class BBDownMuxer
             }
         }
 
-        if (!string.IsNullOrEmpty(pic))
-        {
-            // disposition 的 stream specifier 同样须粘连：-disposition:v:0 attached_pic
-            args.Add($"-disposition:v:{(audioOnly ? "0" : "1")}");
-            args.Add("attached_pic");
-        }
-
         if (points != null && points.Any())
         {
             var meta = BBDownUtil.GetFFmpegMetaString(points);
@@ -251,6 +244,16 @@ static partial class BBDownMuxer
             // 不能在此 inputCount++，否则 -map_chapters 会指向不存在的输入。
             args.Add("-map_chapters");
             args.Add(inputCount.ToString());
+        }
+
+        // ffmpeg 输出选项（如 -disposition）必须位于最后一个输入文件之后，
+        // 否则会被当作后续输入文件的输入选项而报 "cannot be applied to input"。
+        // 所有输入（视频/音频/封面/字幕/章节）都在这里添加完毕，封面在此统一设置。
+        if (!string.IsNullOrEmpty(pic))
+        {
+            // disposition 的 stream specifier 同样须粘连：-disposition:v:0 attached_pic
+            args.Add($"-disposition:v:{(audioOnly ? "0" : "1")}");
+            args.Add("attached_pic");
         }
 
         // 所有输入流依次 -map（-map 0 / -map 1 / ...）
