@@ -24,6 +24,7 @@
 ## 后续迭代入口
 
 - [迭代说明](docs/ITERATION.md)：审核基线、应保留的内容、移植顺序和验收条件。
+- [云端验证](docs/CLOUD_TESTING.md)：独立验证分支的 SDK 调整、检查范围和实际运行记录。
 - [维护约定](AGENTS.md)：本 fork 的文档和交付约定。
 - [迭代 skill](skills/bbdown-fork-iterate/SKILL.md)：可复用的审核、移植、验证和差异文档流程，配套元数据位于同目录的 `agents/openai.yaml`。
 
